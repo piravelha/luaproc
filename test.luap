@@ -1,0 +1,4 @@
+
+#define square(x) = (x) * (x)
+
+print(square(10)) -- print((10) * (10))
