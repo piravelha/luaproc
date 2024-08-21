@@ -182,7 +182,7 @@ fn get_macros(tokens: &Vec<Token>) -> (Vec<Token>, Vec<ValueMacro>, Vec<Function
 fn apply_value_macro(input: Vec<Token>, value_macro: ValueMacro) -> Vec<Token> {
   input.clone().into_iter().enumerate().flat_map(|(i, token)| {
     if token.kind == TokenKind::Name && token.value == value_macro.name {
-      if i < input.len() && input[i + 1].value.as_str() == "=" {
+      if i + 1 < input.len() && input[i + 1].value.as_str() == "=" {
         return vec![token];
       }
       value_macro.value.clone()
