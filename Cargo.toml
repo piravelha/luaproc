@@ -1,5 +1,5 @@
 [package]
-name = "typed-lua"
+name = "luaproc"
 version = "0.1.0"
 edition = "2021"
 

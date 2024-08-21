@@ -1,0 +1,21 @@
+
+#define IOTA = iota_impl()
+
+#define STRUCT(name, values) = \
+  function name(...) \
+    local i = 0 \
+    local args = {...} \
+    local function iota_impl() \
+      i = i + 1 \
+      return args[i] \
+    end \
+    return values \
+  end
+
+STRUCT(Person, {
+  name = IOTA,
+  age = IOTA,
+})
+
+local p = Person("Ian", 15)
+print(p.name, p.age)

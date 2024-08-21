@@ -17,6 +17,8 @@ enum TokenKind {
   Delimiter,
   DefineDirective,
   Newline,
+  Stringify,
+  Vararg,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,12 @@ fn lex_single_token(input: &String) -> Option<(String, Token)> {
   let regexes = vec![(
     Regex::new(r"^(\.|:)\s*[a-zA-Z_]\w*").unwrap(),
     TokenKind::Property,
+  ), (
+    Regex::new(r"^(\.\.\.)").unwrap(),
+    TokenKind::Vararg,
+  ), (
+    Regex::new(r"^(#[a-zA-Z_]\w*#)").unwrap(),
+    TokenKind::Stringify,
   ), (
     Regex::new(r"^[a-zA-Z_]\w*").unwrap(),
     TokenKind::Name,
@@ -82,13 +90,13 @@ fn lex_single_token(input: &String) -> Option<(String, Token)> {
 fn lex_whole_input(input: &String) -> Option<Vec<Token>> {
   let mut tokens: Vec<Token> = vec![];
   let mut remaining = input
-    .trim_matches(|c| c == ' ' || c == '\t')
+    .trim_start_matches(|c| c == ' ' || c == '\t')
     .to_string();
   while !remaining.is_empty() {
     if let Some((rest, token)) = lex_single_token(&remaining) {
       tokens.push(token);
       remaining = rest
-        .trim_matches(|c| c == ' ' || c == '\t')
+        .trim_start_matches(|c| c == ' ' || c == '\t')
         .to_string();
     } else {
       println!("Tokens: {:?}", tokens);
@@ -186,6 +194,15 @@ fn apply_value_macro(input: Vec<Token>, value_macro: ValueMacro) -> Vec<Token> {
         return vec![token];
       }
       value_macro.value.clone()
+    } else if token.kind == TokenKind::Stringify && token.value[1..token.value.len()-1] == value_macro.name {
+      let tok = Token {kind: TokenKind::String, value: ("\"".to_string() + &render_tokens_as_string(value_macro.value.clone()) + "\"").to_string()};
+      return vec![tok];
+    } else if token.value.as_str() == "," && i + 1 < input.len() && input[i + 1].value.as_str() == "__VA_ARGS__" {
+      if value_macro.value.len() == 0 {
+        vec![]
+      } else {
+        vec![token]
+      }
     } else {
       vec![token]
     }
@@ -218,9 +235,9 @@ fn apply_func_macro(input: Vec<Token>, func_macro: FunctionMacro) -> Vec<Token> 
             args_idx += 1;
             continue;
           }
-          if cur_token.value.as_str() == "(" {
+          if cur_token.value.as_str() == "(" || cur_token.value.as_str() == "{" || cur_token.value.as_str() == "[" || cur_token.value.as_str() == "function" {
             nesting_level += 1;
-          } else if cur_token.value.as_str() == ")" {
+          } else if cur_token.value.as_str() == ")" || cur_token.value.as_str() == "}" || cur_token.value.as_str() == "]" || cur_token.value.as_str() == "end" {
             nesting_level -= 1;
             if nesting_level == -1 {
               break;
@@ -229,17 +246,37 @@ fn apply_func_macro(input: Vec<Token>, func_macro: FunctionMacro) -> Vec<Token> 
           args[args_idx].push(cur_token);
         }
         let mut value = func_macro.value.clone();
+        let mut k = 0;
         zip(func_macro.params.clone(), args.clone()).for_each(|(param, arg)| {
-          let val_macro = ValueMacro {
-            name: param,
-            value: arg,
-          };
+          let val_macro;
+          if param.as_str() == "..." {
+            let varargs = args.clone().into_iter().skip(k);
+            let mut comma_sep = vec![];
+            for (i, arg) in varargs.enumerate() {
+              if i > 0 {
+                comma_sep.push(Token {
+                  kind: TokenKind::Delimiter,
+                  value: ",".to_string(),
+                });
+              }
+              comma_sep.extend(arg);
+            }
+            val_macro = ValueMacro {
+              name: "__VA_ARGS__".to_string(),
+              value: comma_sep,
+            }
+          } else {
+            val_macro = ValueMacro {
+              name: param,
+              value: arg,
+            };
+          }
           value = apply_value_macro(value.clone(), val_macro);
+          k += 1;
         });
         new_tokens.pop();
         new_tokens.extend(value.clone());
         i += 1;
-      
       }
     }
   }
@@ -249,7 +286,13 @@ fn apply_func_macro(input: Vec<Token>, func_macro: FunctionMacro) -> Vec<Token> 
 fn render_tokens_as_string(tokens: Vec<Token>) -> String {
   tokens.into_iter()
     .map(|t| t.value.clone())
-    .reduce(|acc, v| (acc + " " + &v).to_string())
+    .reduce(|acc, v| ({
+      if acc.ends_with("\n") {
+        acc + &v
+      } else {
+        acc + " " + &v
+      }
+    }).to_string())
     .unwrap()
 }
 
@@ -278,8 +321,8 @@ fn main() {
       }
     },
   }
-  let backslash_re = Regex::new(r"\\\n").unwrap();
-  let input = backslash_re.replace_all(&input, " ").to_string();
+  let backslash_re = Regex::new(r"\\\r?\n").unwrap();
+  let input = backslash_re.replace_all(&input, "").to_string();
   let result = lex_whole_input(&input);
   let tokens;
   match result {
@@ -301,10 +344,6 @@ fn main() {
       tokens = apply_func_macro(tokens.clone(), m)
     );
   let result = render_tokens_as_string(tokens);
-  let ws_re = Regex::new(r" ([()\[\]{},;]+)").unwrap();
-  let result = ws_re.replace_all(&result, "$1").to_string();
-  let ws_re = Regex::new(r"([(\[{]+) ").unwrap();
-  let result = ws_re.replace_all(&result, "$1").to_string();
   let out = File::create("out.lua");
   match out {
     Err(e) => {
