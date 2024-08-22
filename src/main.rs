@@ -170,9 +170,7 @@ fn eval_pastes(tokens: &Vec<Token>) -> Vec<Token> {
   new_tokens
 }
 
-fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
-  let mut value_macros: Vec<ValueMacro> = vec![];
-  let mut func_macros: Vec<FunctionMacro> = vec![];
+fn get_macros(tokens: &Vec<Token>, value_macros: &mut Vec<ValueMacro>, func_macros: &mut Vec<FunctionMacro>) -> Vec<Token> {
   let mut i = 0;
   let mut new_tokens = vec![];
   while i < tokens.len() {
@@ -191,28 +189,30 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
           continue;
         }
         let mut new_value_macros = vec![];
-        for value_macro in value_macros {
+        for value_macro in value_macros.clone().into_iter() {
           if value_macro.name == name.value {
             continue;
           }
-          new_value_macros.push(value_macro);
+          new_value_macros.push(value_macro.clone());
         }
-        value_macros = new_value_macros;
+        value_macros.clear();
+        value_macros.extend(new_value_macros);
         let mut new_func_macros = vec![];
-        for func_macro in func_macros {
+        for func_macro in func_macros.clone().into_iter() {
           if func_macro.name == name.value {
             continue;
           }
-          new_func_macros.push(func_macro);
+          new_func_macros.push(func_macro.clone());
         }
-        func_macros = new_func_macros;
+        func_macros.clear();
+        func_macros.extend(new_func_macros);
       }
     }
     for value_macro in value_macros.clone().into_iter() {
       match apply_value_macro_once(tokens.clone().into_iter().skip(i - 1).collect(), value_macro.clone()) {
         Some(result_tokens) => {
           new_tokens.pop();
-          new_tokens.extend(eval_pastes(&result_tokens));
+          new_tokens.extend(eval_pastes(&get_macros(&result_tokens, value_macros, func_macros)));
           break;
         },
         None => {},
@@ -221,7 +221,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
     for func_macro in func_macros.clone().into_iter() {
       match apply_func_macro_once(tokens.clone().into_iter().skip(i).collect(), func_macro) {
         Some((result_tokens, new_i)) => {
-          new_tokens.extend(eval_pastes(&result_tokens));
+          new_tokens.extend(eval_pastes(&get_macros(&result_tokens, value_macros, func_macros)));
           i += new_i;
           break;
         },
@@ -235,13 +235,13 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
           continue;
         }
         let mut contains = false;
-        for val_macro in &value_macros {
+        for val_macro in value_macros.into_iter() {
           if val_macro.name == var.value {
             contains = true;
             break
           }
         }
-        for func_macro in &func_macros {
+        for func_macro in func_macros.into_iter() {
           if func_macro.name == var.value {
             contains = true;
             break
@@ -498,7 +498,7 @@ fn main() {
     },
     Some(ts) => tokens = ts
   }
-  let tokens = get_macros(&tokens);
+  let tokens = get_macros(&tokens, &mut vec![], &mut vec![]);
   let result = render_tokens_as_string(tokens);
   let out = File::create("out.lua");
   match out {
