@@ -1,7 +1,6 @@
 
-#define A = \
-  #define B = 5
+#define TEST(name) = local pre_##name##_test = 69
 
-A
+TEST(a)
 
-print(B)
+print(a_test)

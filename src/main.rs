@@ -2,7 +2,8 @@ use std::{
   fs::File,
   io::{Write, Read},
   env,
-  iter::zip
+  iter::zip,
+  process::Command,
 };
 use regex::Regex;
 
@@ -20,6 +21,7 @@ enum TokenKind {
   Newline,
   Stringify,
   Vararg,
+  Paste,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +53,9 @@ fn lex_single_token(input: &String) -> Option<(String, Token)> {
   ), (
     Regex::new(r"^(#[a-zA-Z_]\w*#)").unwrap(),
     TokenKind::Stringify,
+  ), (
+    Regex::new(r"^(##)").unwrap(),
+    TokenKind::Paste,
   ), (
     Regex::new(r"^[a-zA-Z_]\w*").unwrap(),
     TokenKind::Name,
@@ -110,6 +115,37 @@ fn lex_whole_input(input: &String) -> Option<Vec<Token>> {
   Some(tokens)
 }
 
+fn eval_pastes(tokens: &Vec<Token>) -> Vec<Token> {
+  let mut raw_i = 0;
+  let mut new_tokens = vec![];
+  while raw_i < tokens.len() {
+    raw_i += 1;
+    let mut i = raw_i - 1;
+    if tokens[i].kind == TokenKind::Name {
+      let mut parts = vec![tokens[i].value.clone()];
+      while i + 1 < tokens.len() {
+        if tokens[i + 1].kind == TokenKind::Paste {
+          if tokens.len() > i + 2 && tokens[i + 2].kind == TokenKind::Name {
+            i += 1;
+            parts.push(tokens[i + 1].value.clone());
+          } else {
+            break
+          }
+        } else { break }
+        i += 1;
+      }
+      new_tokens.push(Token {
+        kind: TokenKind::Name,
+        value: parts.join(""),
+      });
+      raw_i = i + 1;
+    } else {
+      new_tokens.push(tokens[i].clone());
+    }
+  }
+  new_tokens
+}
+
 fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
   let mut value_macros: Vec<ValueMacro> = vec![];
   let mut func_macros: Vec<FunctionMacro> = vec![];
@@ -152,7 +188,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
       match apply_value_macro_once(tokens.clone().into_iter().skip(i - 1).collect(), value_macro.clone()) {
         Some(result_tokens) => {
           new_tokens.pop();
-          new_tokens.extend(result_tokens);
+          new_tokens.extend(eval_pastes(&result_tokens));
           break;
         },
         None => {},
@@ -161,7 +197,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
     for func_macro in func_macros.clone().into_iter() {
       match apply_func_macro_once(tokens.clone().into_iter().skip(i).collect(), func_macro) {
         Some((result_tokens, new_i)) => {
-          new_tokens.extend(result_tokens);
+          new_tokens.extend(eval_pastes(&result_tokens));
           i += new_i;
           break;
         },
@@ -398,9 +434,18 @@ fn main() {
     Ok(mut f) => {
       match f.write_all(result.as_bytes()) {
         Err(e) => eprintln!("Could not write content: {}", e),
-        Ok(_) => return,
+        Ok(_) => {},
       }
     }
+  }
+  match Command::new("stylua")
+    .arg("out.lua")
+    .output() {
+    Err(e) => {
+      eprintln!("Could not format with stylua: {}", e);
+      return;
+    },
+    Ok(_) => {},
   }
 }
 

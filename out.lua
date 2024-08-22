@@ -1,4 +1,3 @@
+local pre_a_test = 69
 
-#define B = 5 
-
-print ( B ) 
+print(a_test)
