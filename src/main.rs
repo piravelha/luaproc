@@ -18,6 +18,7 @@ enum TokenKind {
   Delimiter,
   DefineDirective,
   Undef,
+  EndDefine,
   Newline,
   Stringify,
   Vararg,
@@ -71,6 +72,9 @@ fn lex_single_token(input: &String) -> Option<(String, Token)> {
   ), (
     Regex::new(r"^#undef").unwrap(),
     TokenKind::Undef,
+  ), (
+    Regex::new(r"^#end").unwrap(),
+    TokenKind::EndDefine,
   ), (
     Regex::new(r"^[+\-*/!@#$%^&:=~<>?.]+").unwrap(),
     TokenKind::Special,
@@ -236,7 +240,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
                 .into_iter()
                 .skip(i + 4)
                 .take_while(|t|
-                  t.kind != TokenKind::Newline)
+                  t.kind != TokenKind::EndDefine)
                 .collect();
               let define = FunctionMacro {
                 name: name.value.clone(),
@@ -244,7 +248,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
                 value: value.clone(),
               };
               func_macros.push(define);
-              i += 4 + value.len();
+              i += 5 + value.len();
               new_tokens.pop();
             }
             continue

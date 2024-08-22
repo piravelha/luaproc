@@ -1,6 +1,9 @@
 
-#define TEST(name) = local pre_##name##_test = 69
+#define TEST(name) =
+  local name##_test = 69
+#end
 
 TEST(a)
 
 print(a_test)
+
