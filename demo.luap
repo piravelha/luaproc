@@ -1,9 +1,10 @@
 
-#define TEST(name) =
-  local name##_test = 69
+#define foreach!(var, tbl, block) =
+  for _, var in pairs(tbl) block
 #end
 
-TEST(a)
+foreach!(x; {1, 2, 3}; do
+  print(x)
+end)
 
-print(a_test)
 

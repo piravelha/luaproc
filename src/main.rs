@@ -10,6 +10,7 @@ use regex::Regex;
 #[derive(Debug, PartialEq, Clone)]
 enum TokenKind {
   Name,
+  MacroName,
   Property,
   Number,
   String,
@@ -17,11 +18,15 @@ enum TokenKind {
   Brace,
   Delimiter,
   DefineDirective,
+  Ifdef,
+  Ifndef,
+  Endif,
   Undef,
   EndDefine,
   Newline,
   Stringify,
   Vararg,
+  TaggedVararg,
   Paste,
 }
 
@@ -52,11 +57,17 @@ fn lex_single_token(input: &String) -> Option<(String, Token)> {
     Regex::new(r"^(\.\.\.)").unwrap(),
     TokenKind::Vararg,
   ), (
+    Regex::new(r"^(#\.\.\.)").unwrap(),
+    TokenKind::TaggedVararg,
+  ), (
     Regex::new(r"^(#[a-zA-Z_]\w*#)").unwrap(),
     TokenKind::Stringify,
   ), (
     Regex::new(r"^(##)").unwrap(),
     TokenKind::Paste,
+  ), (
+    Regex::new(r"^[a-zA-Z_]\w*!").unwrap(),
+    TokenKind::MacroName,
   ), (
     Regex::new(r"^[a-zA-Z_]\w*").unwrap(),
     TokenKind::Name,
@@ -69,6 +80,15 @@ fn lex_single_token(input: &String) -> Option<(String, Token)> {
   ), (
     Regex::new(r"^#define").unwrap(),
     TokenKind::DefineDirective,
+  ), (
+    Regex::new(r"^#ifdef").unwrap(),
+    TokenKind::Ifdef,
+  ), (
+    Regex::new(r"^#ifndef").unwrap(),
+    TokenKind::Ifndef,
+  ), (
+    Regex::new(r"^#endif").unwrap(),
+    TokenKind::Endif,
   ), (
     Regex::new(r"^#undef").unwrap(),
     TokenKind::Undef,
@@ -167,7 +187,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
       if let Some(name) = tokens.into_iter().nth(i) {
         i += 1;
         new_tokens.pop();
-        if name.kind != TokenKind::Name {
+        if name.kind != TokenKind::MacroName {
           continue;
         }
         let mut new_value_macros = vec![];
@@ -208,9 +228,47 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
         None => {},
       }
     } 
+    if token.kind == TokenKind::Ifdef || token.kind == TokenKind::Ifndef {
+      if let Some(var) = tokens.into_iter().nth(i) {
+        new_tokens.pop();
+        if var.kind != TokenKind::MacroName {
+          continue;
+        }
+        let mut contains = false;
+        for val_macro in &value_macros {
+          if val_macro.name == var.value {
+            contains = true;
+            break
+          }
+        }
+        for func_macro in &func_macros {
+          if func_macro.name == var.value {
+            contains = true;
+            break
+          }
+        }
+        if token.kind == TokenKind::Ifndef {
+          contains = !contains;
+        }
+        if !contains {
+          for tok in tokens.into_iter().skip(i + 1) {
+            i += 1;
+            if tok.kind == TokenKind::Endif {
+              break
+            }
+          }
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if token.kind == TokenKind::Endif {
+      new_tokens.pop();
+      continue;
+    }
     if token.kind == TokenKind::DefineDirective {
       if let Some(name) = tokens.into_iter().nth(i) {
-        if name.kind != TokenKind::Name {
+        if name.kind != TokenKind::MacroName {
           continue;
         }
         if let Some(eq) = tokens.into_iter().nth(i + 1) {
@@ -253,6 +311,14 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
             }
             continue
           }
+          if eq.kind == TokenKind::Newline {
+            value_macros.push(ValueMacro {
+              name: name.value.clone(),
+              value: vec![],
+            });
+            i += 2;
+            new_tokens.pop();
+          }
           if eq.value.as_str() != "=" {
             continue;
           }
@@ -260,7 +326,7 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
             .into_iter()
             .skip(i + 2)
             .take_while(|t|
-              t.kind != TokenKind::Newline)
+              t.kind != TokenKind::EndDefine)
             .collect();
           let define = ValueMacro {
             name: name.value.clone(),
@@ -278,18 +344,20 @@ fn get_macros(tokens: &Vec<Token>) -> Vec<Token> {
 
 fn apply_value_macro_once(input: Vec<Token>, value_macro: ValueMacro) -> Option<Vec<Token>> {
   let token = input.clone().into_iter().nth(0)?;
-  if token.kind == TokenKind::Name && token.value == value_macro.name {
+  if token.kind == TokenKind::MacroName && token.value == value_macro.name {
     if input.len() > 1 && input[1].value.as_str() == "=" {
       return Some(vec![token])
     }
     return Some(value_macro.value.clone());
   } else if token.kind == TokenKind::Stringify && token.value[1..token.value.len()-1] == value_macro.name {
-    let tok = Token {kind: TokenKind::String, value: ("\"".to_string() + &render_tokens_as_string(value_macro.value.clone()) + "\"").to_string()};
+    let tok = Token {kind: TokenKind::String, value: format!("{:?}", render_tokens_as_string(value_macro.value.clone()))};
     return Some(vec![tok]);
-  } else if token.value.as_str() == "," && input.len() > 1 && input[1].value.as_str() == "__VA_ARGS__" {
+  } else if token.kind == TokenKind::Delimiter && input.len() > 1 && (input[1].value.as_str() == "__VA_ARGS__" || input[1].value.as_str() == "#...") {
     if value_macro.value.len() != 0 {
       return Some(vec![token]);
     }
+  } else if token.kind == TokenKind::TaggedVararg {
+    return Some(value_macro.value.clone());
   }
   None
 }
@@ -302,13 +370,15 @@ fn apply_value_macros(input: Vec<Token>, value_macro: ValueMacro) -> Vec<Token> 
       }
       value_macro.value.clone()
     } else if token.kind == TokenKind::Stringify && token.value[1..token.value.len()-1] == value_macro.name {
-      let tok = Token {kind: TokenKind::String, value: ("\"".to_string() + &render_tokens_as_string(value_macro.value.clone()) + "\"").to_string()};
+      let tok = Token {kind: TokenKind::String, value: format!("{:?}", render_tokens_as_string(value_macro.value.clone()))};
       vec![tok]
-    } else if token.value.as_str() == "," && i + 1 < input.len() && input[i + 1].value.as_str() == "__VA_ARGS__" {
+    } else if token.kind == TokenKind::Delimiter && i + 1 < input.len() && (input[i + 1].value.as_str() == "__VA_ARGS__" || input[i + 1].value.as_str() == "#...") {
       if value_macro.value.len() != 0 {
         return vec![token];
       }
       vec![]
+    } else if token.kind == TokenKind::TaggedVararg {
+      return value_macro.value.clone();
     } else {
       vec![token]
     }
@@ -318,9 +388,10 @@ fn apply_value_macros(input: Vec<Token>, value_macro: ValueMacro) -> Vec<Token> 
 fn apply_func_macro_once(input: Vec<Token>, func_macro: FunctionMacro) -> Option<(Vec<Token>, usize)> {
   let tokens = input;
   let token = tokens.clone().into_iter().nth(0)?;
-  if token.kind == TokenKind::Name && token.value == func_macro.name {
+  if token.kind == TokenKind::MacroName && token.value == func_macro.name {
     if let Some(lparen) = tokens.clone().into_iter().nth(1) {
-      if lparen.value.as_str() != "(" {
+      let lparen_val = lparen.value.as_str();
+      if lparen_val != "(" && lparen_val != "[" && lparen_val != "{" {
         return None;
       }
       let mut nesting_level = 0;
@@ -332,7 +403,7 @@ fn apply_func_macro_once(input: Vec<Token>, func_macro: FunctionMacro) -> Option
           args.push(vec![]);
           continue;
         }
-        if cur_token.value.as_str() == "(" || cur_token.value.as_str() == "{" || cur_token.value.as_str() == "[" || cur_token.value.as_str() == "function" {
+        if cur_token.value.as_str() == "(" || cur_token.value.as_str() == "{" || cur_token.value.as_str() == "[" || cur_token.value.as_str() == "function" || cur_token.value.as_str() == "do" || cur_token.value.as_str() == "then" {
           nesting_level += 1;
         } else if cur_token.value.as_str() == ")" || cur_token.value.as_str() == "}" || cur_token.value.as_str() == "]" || cur_token.value.as_str() == "end" {
           nesting_level -= 1;

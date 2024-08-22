@@ -1,3 +1,3 @@
-local a_test = 69
-
-print(a_test)
+for _, x in pairs({ 1, 2, 3 }) do
+	print(x)
+end
